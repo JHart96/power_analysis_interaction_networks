@@ -1,0 +1,217 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(ggplot2)
+```
+
+```{r}
+ll.nbinom <- function(par, x, d) {
+  if (min(par) < 0) {
+    return(Inf)
+  }
+  -sum(dnbinom(x, par[1], (par[2]/d)/((par[2]/d) + 1), log=TRUE))
+}
+
+lk.nbinom <- function(par, x, d, priors=list(a=c(1, 0.5), b=c(1, 0.5))) {
+  if (min(par) < 0) {
+    return(-Inf)
+  }
+  r <- par[1]
+  p <- par[2]/(par[2] + d)
+  sum(dnbinom(x, r, p, log=TRUE)) + dgamma(par[1], priors$a[1], priors$a[2], log=TRUE) + dgamma(par[2], priors$b[1], priors$b[2], log=TRUE)
+}
+
+rtnorm <- function(n, mean = 0, sd = 1, lower=-Inf, upper=Inf) {
+  # range is a vector of two values
+  
+  F.a <- pnorm(lower, mean = mean, sd = sd)
+  F.b <- pnorm(upper, mean = mean, sd = sd)
+  
+  u <- runif(n, min = F.a, max = F.b)
+  
+  qnorm(u, mean = mean, sd = sd)
+}
+
+metropolis <- function(target, initial, iterations=10000, warmup=2000, thin=100) {
+  k <- length(initial)
+  chain <- matrix(0, iterations + warmup, k)
+  accepted <- 0
+  
+  chain[1, ] <- initial
+  
+  for (i in 2:(iterations + warmup)) {
+    current <- chain[i - 1, ]
+    candidate <- rnorm(k, mean=current, sd=1)
+    # candidate <- rtnorm(k, mean=current, sd=1, lower=0, upper=)
+    A <- exp(target(candidate) - target(current))
+    if (runif(1) < A) {
+      accepted <- accepted + 1
+      chain[i, ] <- candidate
+    } else {
+      chain[i, ] <- current
+    }
+  }
+  # print(accepted/(iterations+warmup))
+  return(chain[seq(warmup, iterations + warmup, thin), ])
+}
+
+gibbs <- function(target, initial, iterations=10000, warmup=2000, thin=100) {
+  k <- length(initial)
+  chain <- matrix(0, iterations + warmup, k)
+  accepted <- 0
+  
+  chain[1, ] <- initial
+  
+  for (i in 2:(iterations + warmup)) {
+    current <- chain[i - 1, ]
+    candidate <- chain[i - 1, ]
+    for (j in 1:k) {
+      candidate[j] <- rnorm(1, mean=current[j], sd=1)
+      # candidate[j] <- rtnorm(1, mean=current[j], sd=1, lower=0, upper=Inf)
+      A <- exp(target(candidate) - target(current))
+      if (runif(1) < A) {
+        current <- candidate
+      } else {
+        candidate <- current
+      }
+    }
+    chain[i, ] <- current
+  }
+  # print(accepted/(iterations+warmup))
+  return(chain[seq(warmup, iterations + warmup, thin), ])
+}
+```
+
+```{r}
+plot(density(rgamma(1000, 1, 1)))
+lines(density(rgamma(1000, 1, 0.1)), col=2)
+```
+
+```{r}
+n <- 100
+iterations <- 100
+cors_true <- rep(0, iterations)
+cors_est <- rep(0, iterations)
+cors_est_lb <- rep(0, iterations)
+cors_est_ub <- rep(0, iterations)
+mean_sampling <- rep(0, iterations)
+bad_chains <- rep(0, iterations)
+
+i <- 1
+
+for (i in 1:iterations) {
+  print(i)
+  a <- runif(1, 1, 10)
+  b <- runif(1, 1, 10)
+  
+  # Do variable sampling effort.
+  mean_sampling[i] <- runif(1, 1, 20)
+  d <- rpois(n, mean_sampling[i])
+  d[d == 0] = 1
+  
+  alpha <- rgamma(n, a, b)
+  alpha_hat <- rpois(n, alpha*d)/d
+  
+  cors_true[i] <- cor(alpha, alpha_hat)
+  # cors_true[i] <- var(alpha)/var(alpha_hat)
+
+  # parameters <- optim(c(1, 1), ll.nbinom, x=as.integer(alpha_hat * d), d=d)$par
+  # a_ <- parameters[1]
+  # b_ <- parameters[2]
+  
+  target <- function(par) lk.nbinom(par, as.integer(alpha_hat * d), d)
+  chain <- gibbs(target, c(1, 1), warmup=2000, iterations=20000, thin=10)
+
+  plot(chain[, 1], type="l", col=1, ylim=c(0, max(chain)))
+  lines(chain[, 2], type="l", col=2)
+    
+  qt <- quantile(chain[, 2], probs=c(0.025, 0.5, 0.975))
+
+  b_ <- qt[2]
+  b_lb <- qt[1]
+  b_ub <- qt[3]
+  
+  cors_est[i] <- sqrt(n/(n + b_ * sum(d^-1)))
+  cors_est_ub[i] <- sqrt(n/(n + b_ub * sum(d^-1)))
+  cors_est_lb[i] <- sqrt(n/(n + b_lb * sum(d^-1)))
+}
+
+qplot(cors_true, cors_est) +
+  geom_errorbar(aes(ymin=cors_est_lb, ymax=cors_est_ub)) +
+  geom_smooth() +
+  geom_abline() +
+  xlab("True correlation") +
+  ylab("Estimated correlation")
+
+qplot(mean_sampling, abs(cors_true - cors_est)) +
+  # geom_errorbar(aes(ymin=abs(cors_true-cors_est_lb), ymax=abs(cors_true-cors_est_ub))) +
+  geom_smooth()
+```
+
+```{r}
+a <- runif(1, 1, 10)
+b <- runif(1, 1, 10)
+
+X <- seq(0.1, 100, 0.1)
+
+alpha <- rgamma(n, a, b)
+
+priors <- list(a=c(1, 1), b=c(1, 1))
+
+d <- rep(1, n)
+alpha_hat <- rpois(n, alpha*d)/d
+plot(X, sapply(X, function(x) lk.nbinom(c(a, x), as.integer(alpha_hat * d), d, priors=priors)), type="l", col=1)
+
+d <- rep(10, n)
+alpha_hat <- rpois(n, alpha*d)/d
+lines(X, sapply(X, function(x) lk.nbinom(c(a, x), as.integer(alpha_hat * d), d, priors=priors)), type="l", col=2)
+
+d <- rep(100, n)
+alpha_hat <- rpois(n, alpha*d)/d
+lines(X, sapply(X, function(x) lk.nbinom(c(a, x), as.integer(alpha_hat * d), d, priors=priors)), type="l", col=3)
+```
+
+```{r}
+n <- 100
+iterations <- 100
+
+mean_sampling <- rep(0, iterations)
+test_statistics <- rep(0, iterations)
+
+i <- 1
+
+for (i in 1:iterations) {
+  a <- runif(1, 1, 10)
+  b <- runif(1, 1, 10)
+  
+  # Do variable sampling effort.
+  mean_sampling[i] <- runif(1, 1, 20)
+  d <- rpois(n, mean_sampling[i])
+  d[d == 0] = 1
+  
+  alpha <- rgamma(n, a, b)
+  alpha_hat <- rpois(n, alpha*d)/d
+  index_diff <- alpha - alpha_hat
+  # cor(index_diff, rnorm(length(index_diff), mean(index_diff), sd(index_diff)))
+  qq.y <- (as.vector(quantile(index_diff, probs=seq(0, 1, 0.01))) - mean(index_diff))/sd(index_diff)
+  qq.x <- as.vector(quantile(rnorm(1e4, 0, 1), probs=seq(0, 1, 0.01)))
+  
+  # qplot(qq.x, qq.y) +
+  #   geom_abline() +
+  #   geom_smooth(method="lm")
+  
+  test_statistics[i] <- sum(abs(qq.x - qq.y))
+
+  # sw <- shapiro.test(alpha - alpha_hat)
+  # test_statistics[i] <- sw$statistic[[1]]
+}
+
+qplot(mean_sampling, test_statistics) +
+  # geom_errorbar(aes(ymin=abs(cors_true-cors_est_lb), ymax=abs(cors_true-cors_est_ub))) +
+  geom_smooth() +
+  xlab("Mean sampling (n)") +
+  ylab("QQ normality error")
+```
