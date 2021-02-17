@@ -50,7 +50,9 @@ $$
 
 The variance of the estimated association rates is slightly trickier, we use the variance of the negative binomial to get:
 $$
-\text{Var}(\hat{\lambda_i}) = \text{Var} \left( \frac{X_i}{d_i}\right) = \frac{1}{d_i^2} \text{Var}(X_i) = \frac{\alpha d_i (\beta + d_i)}{d_i^2\beta^2}.
+\begin{aligned}
+\text{Var}(\hat{\lambda_i})  &= \text{Var} \left( \frac{X_i}{d_i}\right) \\ &= \frac{1}{d_i^2} \text{Var}(X_i) \\ &= \frac{\alpha d_i (\beta + d_i)}{d_i^2\beta^2}.
+\end{aligned}
 $$
 
 Again, summing over the $n$ dyads we get
@@ -62,7 +64,9 @@ $$
 
 Bringing these together, we get:
 $$
-\text{EV} = T\hat{T}^{-1} = \frac{n\alpha}{\beta^2} \frac{\beta^2}{\alpha} \left(n + \beta \sum_{i=1}^n d_i^{-1}\right)^{-1} = \frac{n}{n + \beta \sum_{i=1}^n d_i^{-1}}.
+\begin{aligned}
+\text{EV} & = T\hat{T}^{-1} \\&= \frac{n\alpha}{\beta^2} \frac{\beta^2}{\alpha} \left(n + \beta \sum_{i=1}^n d_i^{-1}\right)^{-1} \\&= \frac{n}{n + \beta \sum_{i=1}^n d_i^{-1}}.
+\end{aligned}
 $$
 
 The coefficient of variation/social differentiation of the interaction rate under this method is:
