@@ -367,9 +367,9 @@ summary {
 
 <div id="estimating-accuracy-of-sampling-with-interaction-rate-data---derivation" class="section level1">
 <h1>Estimating Accuracy of Sampling with Interaction Rate Data - Derivation</h1>
-<p>If we assume the population association rates <span class="math inline">\(\lambda_i\)</span> are gamma-distributed, we have: <span class="math display">\[
-\lambda_i \sim \text{Gamma}(\alpha, \beta).
-\]</span> where <span class="math inline">\(\alpha, \beta\)</span> are the population-level parameters.</p>
+<p>If we assume the population association rates <span class="math inline">\(\lambda_i\)</span> are gamma-distributed, we have:</p>
+<pre class="math"><code>\lambda_i \sim \text{Gamma}(\alpha, \beta).</code></pre>
+<p>where <span class="math inline">\(\alpha, \beta\)</span> are the population-level parameters.</p>
 <p>The observed number of interactions <span class="math inline">\(X_i\)</span> for the <span class="math inline">\(i\)</span>-th dyad is likely to be Poisson-distributed, and will depend on the number of times the dyad were observed <span class="math inline">\(d_i\)</span>. This gives us: <span class="math display">\[
 X_i \sim \text{Poisson}(d_i \lambda_i) .
 \]</span> Since <span class="math inline">\(d_i\)</span> is a constant, the distribution of <span class="math inline">\(d_i \lambda_i\)</span> is given by <span class="math display">\[
