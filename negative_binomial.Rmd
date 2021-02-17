@@ -9,8 +9,6 @@ output:
 
 ## Derivation
 
-# Estimating Accuracy of Sampling with Interaction Rate Data - Derivation
-
 If we assume the population association rates $\lambda_i$ are gamma-distributed, we have:
 $$
 \lambda_i \sim \text{Gamma}(\alpha, \beta).
