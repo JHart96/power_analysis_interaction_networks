@@ -1,0 +1,212 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+The Bayes factor in favour of model 1 over model 0 can be computed using relative likelihood:
+
+$$
+\text{BF}_{10} = \exp \left(\frac{\text{BIC}\left(M_0\right) - \text{BIC}\left(M_1\right)}{2}\right)
+$$
+where $\text{BIC$ is the Bayes information criterion, computed by
+
+$$
+\text{BIC}(M_i) = k_i \ln(n) - 2\ell_i
+$$
+where $k_i$ is the number of parameters in the $i$-th model, and $\ell_i$ is the maximum likelihood of the $i$-th model.
+
+The maximum likelihood for ordinary least squares regression is given by
+
+$$
+
+$$
+
+```{r setup}
+knitr::opts_chunk$set(cache = TRUE)
+library(ggplot2)
+library(igraph)
+```
+
+Define log-likelihood function of negative binomial with gamma parameters (in conjugate form) so we can estimate the parameters and their upper and lower bounds.
+
+```{r}
+# Log-likelihood function of negative binomial with gamma parameterisation. Parameters have gamma priors.
+lk.nbinom <- function(par, x, d, priors=list(a=c(1, 0.5), b=c(1, 0.5))) {
+  if (min(par) < 0) {
+    return(-Inf)
+  }
+  r <- par[1]
+  p <- par[2]/(par[2] + d)
+  sum(dnbinom(x, r, p, log=TRUE)) + dgamma(par[1], priors$a[1], priors$a[2], log=TRUE) + dgamma(par[2], priors$b[1], priors$b[2], log=TRUE)
+}
+
+# Gibbs sampler. target is function accepting parameter vector. initial is starting vector, to be accepted by target.
+gibbs <- function(target, initial, iterations=10000, warmup=2000, thin=100) {
+  k <- length(initial)
+  chain <- matrix(0, iterations + warmup, k)
+  
+  chain[1, ] <- initial
+  
+  for (i in 2:(iterations + warmup)) {
+    current <- chain[i - 1, ]
+    candidate <- chain[i - 1, ]
+    for (j in 1:k) {
+      candidate[j] <- rnorm(1, mean=current[j], sd=1)
+      A <- exp(target(candidate) - target(current))
+      if (runif(1) < A) {
+        current <- candidate
+      } else {
+        candidate <- current
+      }
+    }
+    chain[i, ] <- current
+  }
+  return(chain[seq(warmup, iterations + warmup, thin), ])
+}
+```
+
+```{r}
+n <- 20
+p <- 0.2
+
+a <- 2
+b <- 5
+
+true_adj <- matrix((p < runif(n^2)) * rgamma(n^2, a, b), n, n)
+true_adj <- true_adj * upper.tri(true_adj)
+
+lm()
+
+net <- graph_from_adjacency_matrix(true_adj, mode="undirected", weighted=TRUE)
+coords <- layout_nicely(net)
+plot(net, edge.width=E(net)$weight, layout=coords)
+```
+
+```{r}
+metric <- strength(net)
+trait <- metric + rnorm(n)
+qplot(metric, trait)
+
+coef_true <- lm(trait ~ metric)$coefficients[[2]]
+```
+
+```{r}
+n <- 10
+p <- 0.2
+
+results_net <- data.frame(net_id=numeric(), a=numeric(), b=numeric(), coef_elbow=numeric(), pval_elbow=numeric())
+
+pb <- txtProgressBar(max=100, style=3)
+
+for (net_id in 1:100) {
+  
+  # n <- sample(seq(10, 50, 10), size=1)
+  # p <- 0.2
+  
+  a <- runif(1, 1, 20)
+  b <- runif(1, 1, 20)
+  
+  true_adj <- matrix((p < runif(n^2)) * rgamma(n^2, a, b), n, n)
+  true_adj <- true_adj * upper.tri(true_adj)
+  
+  net <- graph_from_adjacency_matrix(true_adj, mode="undirected", weighted=TRUE)
+  
+  metric <- strength(net)
+  trait <- metric + rnorm(n, sd=5)
+  
+  coef_true <- lm(trait ~ metric)$coefficients[[2]]
+  
+  results <- data.frame(sampling=numeric(), coef_est=numeric(), ev=numeric(), pval=numeric())
+  
+  sampling_sizes <- seq(5, 100, 1)
+  
+  for (s in sampling_sizes) {
+    for (iter in 1:10) {
+      # Sampling
+      d <- matrix(s, n, n) # Units of time spent sampling per dyad.
+      est_adj <- matrix(0, n, n)
+      
+      for (i in 1:n) {
+        for (j in 1:n) {
+          est_adj[i, j] <- rpois(1, true_adj[i, j] * d[i, j])/d[i, j]
+        }
+      }
+      
+      est_adj <- est_adj * upper.tri(est_adj)
+      
+      # Build network
+      net_est <- graph_from_adjacency_matrix(est_adj, mode="undirected", weighted=TRUE)
+      
+      metric_est <- strength(net_est)
+    
+      fit <- lm(trait ~ metric_est)
+      
+      coef_est <- fit$coefficients[[2]]
+      ev <- n/(n + b * sum(d^-1))
+      pval <- summary(fit)$coefficient[2, 4]
+      
+      results[nrow(results) + 1, ] <- c(s, abs(coef_true - coef_est), ev, pval)
+    }
+  }
+  
+  lo <- loess(coef_est ~ sampling, results)
+  elbow_sampling <- sampling_sizes[which.max(diff(predict(lo, sampling_sizes), differences=2))]
+  coef_elbow <- mean(results[results$sampling == elbow_sampling, "ev"])
+
+  lo <- loess(pval ~ sampling, results)
+  elbow_sampling <- sampling_sizes[which.max(diff(predict(lo, sampling_sizes), differences=2))]
+  pval_elbow <- mean(results[results$sampling == elbow_sampling, "ev"])
+  
+  results_net[nrow(results_net) + 1, ] <- c(net_id, a, b, coef_elbow, pval_elbow)
+  
+  setTxtProgressBar(pb, net_id)
+}
+
+close(pb)
+
+ggplot(results, aes(x=sampling)) +
+  geom_point(aes(y=pval, colour="P-value")) +
+  geom_smooth(aes(y=pval, colour="P-value")) +
+  geom_line(aes(y=ev/max(ev), colour="Explained variance")) +
+  scale_y_continuous(name="P-value", sec.axis=sec_axis(~.*max(ev), name="Explained variance")) +
+  scale_colour_manual(values = c(1, 2)) +
+  labs(y = "Coefficient difference", x = "Sampling effort", colour = "Value") +
+  theme(legend.position = c(0.2, 0.9))
+
+results_net
+```
+
+```{r}
+ggplot(results_net, aes(x=b, y=coef_elbow, color=as.factor(net_id))) +
+  geom_point()
+```
+
+```{r}
+ggplot(results_net, aes(x=b, y=pval_elbow, color=as.factor(net_id))) +
+  geom_point()
+```
+
+
+```{r}
+pred_ev <- 0.76 - 0.17 * log(results_net$b)
+
+ggplot(results_net, aes(x=b, y=pval_elbow)) +
+  geom_point() +
+  geom_line(aes(y=pred_ev))
+
+ggplot(results_net, aes(x=b, y=coef_elbow)) +
+  geom_point() +
+  geom_line(aes(y=pred_ev))
+```
+
+```{r}
+pred_ev <- 0.75 + -0.15 * log(results_net$b)
+qplot(results_net$b, results_net$coef_elbow) +
+  geom_line(aes(y=pred_ev))
+
+
+confint(lm(results_net$coef_elbow ~ log(results_net$b)))
+confint(lm(results_net$pval_elbow ~ log(results_net$b)))
+
+
+```
