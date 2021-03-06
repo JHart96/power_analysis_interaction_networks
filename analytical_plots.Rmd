@@ -1,0 +1,113 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(latex2exp)
+library(ggplot2)
+theme_set(theme_classic())
+cp <- c("#617899", "#38acaf", "#6fda97")
+```
+
+```{r}
+rho <- function(mu, S, D) (S * sqrt(mu * D))/(sqrt(1 + mu * S^2 * D))
+```
+
+```{r}
+mu <- 1.0 # Mean interaction rate
+S <- seq(0, 1.0, 0.01) # Social differentiation
+
+I <- 10 # Interactions seen per dyad
+D <- I/mu
+df_1 <- data.frame(cbind(mu, S, D))
+
+I <- 100 # Interactions seen per dyad
+D <- I/mu
+df_2 <- data.frame(cbind(mu, S, D))
+
+I <- 1000 # Interactions seen per dyad
+D <- I/mu
+df_3 <- data.frame(cbind(mu, S, D))
+
+df <- rbind(df_1, df_2, df_3)
+df$rho <- apply(df, 1, function(par) rho(par[1], par[2], par[3]))
+df$I <- df$D * df$mu
+df$D <- as.factor(df$D)
+
+ggplot(df, aes(x=S, y=rho, color=as.factor(I))) +
+  geom_line(size=1) +
+  scale_color_manual(values = c(cp[4], cp[6], cp[8])) +
+  labs(x=TeX("Social differentiation, $S$"), y=TeX("Correlation, $\\rho$"), color=TeX("$I$"))+
+  theme(legend.position = c(0.8, 0.3))
+
+ggsave("figures/rho_S.png", height=3, width=4)
+```
+
+```{r}
+mu <- 1.0 # Mean interaction rate
+I <- seq(0, 1000, 1) # Interactions seen per dyad
+D <- I/mu
+
+S <- 0.05
+df_1 <- data.frame(cbind(mu, S, D))
+
+S <- 0.2
+df_2 <- data.frame(cbind(mu, S, D))
+
+S <- 0.8
+df_3 <- data.frame(cbind(mu, S, D))
+
+df <- rbind(df_1, df_2, df_3)
+df$rho <- apply(df, 1, function(par) rho(par[1], par[2], par[3]))
+df$I <- df$D * df$mu
+df$D <- as.factor(df$D)
+
+ggplot(df, aes(x=I, y=rho, color=as.factor(S))) +
+  geom_line(size=1) +
+  scale_color_manual(values = c(cp[4], cp[6], cp[8])) +
+  labs(x=TeX("Total interactions, $I$"), y=TeX("Correlation, $\\rho$"), color=TeX("$S$")) +
+  theme(legend.position = c(0.8, 0.3))
+
+ggsave("figures/rho_I.png", height=3, width=4)
+```
+
+```{r}
+elbow_points <- rep(0, 1)
+optimal_sampling <- rep(0, 1)
+
+# social_differentiations <- c(0.2, 0.5, 0.8)
+social_differentiations <- seq(1/2000, 1.0, 1/2000)
+
+for (i in 1:length(social_differentiations)) {
+  I <- seq(0, 10000, 1)
+  mu <- 10
+  D <- I/mu
+  S <- social_differentiations[i]
+  
+  rho_ <- rho(mu, S, D)
+  
+  theta <- atan2(max(rho_) - min(rho_), max(I) - min(I))
+  co = cos(theta)
+  si = sin(theta)
+  rotation_matrix = matrix(c(co, -si, si, co), nrow=2, ncol=2)
+  
+  rotated_data <- cbind(rho_, I) %*% rotation_matrix
+  
+  rho_prime <- rho_[which.max(rotated_data[, 1])] # Optimal rho, by diminishing returns principle.
+  
+  I_prime <- I[which.max(rotated_data[, 1])]
+  
+  elbow_points[i] <- rho_prime
+  optimal_sampling[i] <- I_prime
+}
+
+lo <- loess(results_agg$pval ~ results_agg$rho)
+power <-predict(lo, elbow_points)
+power[power > 1] <- 1
+
+plot(social_differentiations, elbow_points, type="l")
+plot(social_differentiations, power, type="l")
+plot(social_differentiations, optimal_sampling, type="l")
+# lines(social_differentiations, power)
+```
