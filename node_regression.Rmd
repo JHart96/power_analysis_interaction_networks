@@ -3,648 +3,238 @@ title: "R Notebook"
 output: html_notebook
 ---
 
-The Bayes factor in favour of model 1 over model 0 can be computed using relative likelihood:
-
-$$
-\text{BF}_{10} = \exp \left(\frac{\text{BIC}\left(M_0\right) - \text{BIC}\left(M_1\right)}{2}\right)
-$$
-where $\text{BIC$ is the Bayes information criterion, computed by
-
-$$
-\text{BIC}(M_i) = k_i \ln(n) - 2\ell_i
-$$
-where $k_i$ is the number of parameters in the $i$-th model, and $\ell_i$ is the maximum likelihood of the $i$-th model.
-
-The maximum likelihood for ordinary least squares regression is given by
-
-$$
-
-$$
-
-```{r setup}
-knitr::opts_chunk$set(cache = TRUE)
-library(ggplot2)
+```{r}
 library(igraph)
-```
+library(ggplot2)
 
-Define log-likelihood function of negative binomial with gamma parameters (in conjugate form) so we can estimate the parameters and their upper and lower bounds.
+cp <- c("#617899", "#38acaf", "#6fda97", "#c7e9b4", "#ffffcc")
+cp <- c("#003f5c", "#2f4b7c", "#665191", "#a05195", "#d45087", "#f95d6a", "#ff7c43", "#ffa600")
 
-```{r}
-# Log-likelihood function of negative binomial with gamma parameterisation. Parameters have gamma priors.
-lk.nbinom <- function(par, x, d, priors=list(a=c(1, 0.5), b=c(1, 0.5))) {
-  if (min(par) < 0) {
-    return(-Inf)
-  }
-  r <- par[1]
-  p <- par[2]/(par[2] + d)
-  sum(dnbinom(x, r, p, log=TRUE)) + dgamma(par[1], priors$a[1], priors$a[2], log=TRUE) + dgamma(par[2], priors$b[1], priors$b[2], log=TRUE)
+node_regression <- function(x, y) {
+  n <- length(y)
+  X <- cbind(rep(1, n), x)
+  obs <- .lm.fit(X, y)$coefficients
+  null <- sapply(1:1000, function(i) .lm.fit(X, sample(y))$coefficients[[2]])
+  pval <- mean(abs(obs[[2]]) <= abs(null))
+  list(estimates=obs, pval=pval)
 }
 
-# Gibbs sampler. target is function accepting parameter vector. initial is starting vector, to be accepted by target.
-gibbs <- function(target, initial, iterations=10000, warmup=2000, thin=100) {
-  k <- length(initial)
-  chain <- matrix(0, iterations + warmup, k)
-  
-  chain[1, ] <- initial
-  
-  for (i in 2:(iterations + warmup)) {
-    current <- chain[i - 1, ]
-    candidate <- chain[i - 1, ]
-    for (j in 1:k) {
-      candidate[j] <- rnorm(1, mean=current[j], sd=1)
-      A <- exp(target(candidate) - target(current))
-      if (runif(1) < A) {
-        current <- candidate
-      } else {
-        candidate <- current
-      }
-    }
-    chain[i, ] <- current
+loss <- function(r, n, power) {
+  if (r <= 0 || r >= 1) {
+    return(Inf)
   }
-  return(chain[seq(warmup, iterations + warmup, thin), ])
+  pvals <- rep(0, 200)
+  for (i in 1:200) {
+    x <- rnorm(n)
+    
+    lm_sd <- 1
+    
+    effect_size <- r * lm_sd * sqrt(1/(1 - r))/(sd(x) * sqrt(r + 1))
+    y <- 1 + effect_size * x + rnorm(n, sd=lm_sd)
+    pvals[i] <- summary(lm(y ~ x))$coefficients[2, 4]
+  }
+  (mean(pvals < 0.05) - power)^2
+}
+
+grid_search <- function(n, power) {
+  search_range <- seq(0.0, 1.0, 0.05)
+  
+  losses <- c()
+  for (i in 2:(length(search_range) - 1)) {
+    # print(search_range[i])
+    r <- search_range[i]
+    
+    losses <- c(losses, loss(r, n, power))
+  }
+  
+  # search_range[which.min(losses) + 1]
+  
+  min_loss_idx <- which.min(losses) + 1
+  min_loss <- search_range[min_loss_idx]
+  
+  search_range <- seq(min_loss - 0.05, min_loss + 0.05, 0.005)
+  
+  losses <- c()
+  for (i in 2:(length(search_range) - 1)) {
+    # print(search_range[i])
+    r <- search_range[i]
+    
+    losses <- c(losses, loss(r, n, power))
+  }
+  
+  r_ <- search_range[which.min(losses) + 1]
+  r_
 }
 ```
 
+## Compute the R values required to achieve a given level of power.
+
 ```{r}
-n <- 20
-p <- 0.2
+# # Find Pearson's r value for given number of nodes and statistical power.
 
-a <- 2
-b <- 5
+pearson_rs <- data.frame(n=numeric(), r=numeric(), power=numeric(), error=numeric())
+power <- 1.0
 
-true_adj <- matrix((p < runif(n^2)) * rgamma(n^2, a, b), n, n)
-true_adj <- true_adj * upper.tri(true_adj)
+for (n in c(10, 20, 50, 100, 200)) {
+  r <- grid_search(n, power)
+  error <- loss(r, n, power)
+  pearson_rs[nrow(pearson_rs) + 1, ] <- c(n, r, power, error)
+}
 
-lm()
-
-net <- graph_from_adjacency_matrix(true_adj, mode="undirected", weighted=TRUE)
-coords <- layout_nicely(net)
-plot(net, edge.width=E(net)$weight, layout=coords)
+pearson_rs
 ```
 
-```{r}
-metric <- strength(net)
-trait <- metric + rnorm(n)
-qplot(metric, trait)
-
-coef_true <- lm(trait ~ metric)$coefficients[[2]]
-```
+## Run main simulations using previously computed R values.
 
 ```{r}
-n <- 10
-p <- 0.2
 
-results_net <- data.frame(net_id=numeric(), n=numeric(), effect_size=numeric(), a=numeric(), b=numeric(), sampling_elbow=numeric(), coef_elbow=numeric(), pval_elbow=numeric())
+results <- data.frame(rho=numeric(), correlation=numeric(), pval=numeric(), samples=numeric(), num_nodes=numeric(), pearson_r=numeric())
 
-results <- data.frame(a=numeric(), b=numeric(), s=numeric(), pval=numeric(), effect_size=numeric(), correct=numeric(), ev=numeric(), coef_diff=numeric())
+pb <- txtProgressBar(min=0, max=1000, style=3)
 
-pb <- txtProgressBar(max=100, style=3)
+num_repeats <- 100
 
-for (net_id in 1:100) {
+for (net_id in 1:1000) {
+  # param_idx <- sample(1:length(n_r_params$n), size=1)
+  param_idx <- sample(1:nrow(pearson_rs), size=1)
   
-  # n <- sample(seq(10, 50, 10), size=1)
-  n <- 20
-  p <- 0.2
+  n <- pearson_rs[param_idx, ]$n
+  r <- pearson_rs[param_idx, ]$r
+
+  s <- sample(seq(100, 10000, 100), size=1)
+
+  mu <- runif(1, 1, 100)
   
-  effect_size <- sample(c(0, 1), size=1)
-  # effect_size <- 1
+  rho <- runif(1, 0, 1.0)
+  b <- s * (1 - rho^2)/rho^2
+  a <- b * mu
   
-  a <- runif(1, 0, 5)
-  # b <- runif(1, 0, 5)
-  b <- 5
-  # s <- sample(5:125, size=1)
+  lm_sd <- 1
   
-  true_adj <- matrix((p < runif(n^2)) * rgamma(n^2, a, b), n, n)
-  true_adj <- true_adj * upper.tri(true_adj)
-  
-  net <- graph_from_adjacency_matrix(true_adj, mode="undirected", weighted=TRUE)
-  
+  # Generate association rates.
+  alpha <- rgamma(n^2, a, b) # Actual rate.
+
+  net <- graph_from_adjacency_matrix(matrix(alpha, n, n), weighted=TRUE)
+
   metric <- strength(net)
-  trait <- effect_size * metric + rnorm(n, sd=100)
-  
-  coef_true <- lm(trait ~ metric)$coefficients[[2]]
-  
-  for (s in seq(5, 100, 1)) {
-  
-    # results <- data.frame(sampling=numeric(), coef_est=numeric(), ev=numeric(), pval=numeric())
+
+  for (i in 1:num_repeats) {
+    effect_size <- r * lm_sd * sqrt(1/(1 - r))/(sd(metric) * sqrt(r + 1))
     
-        # Sampling
-    d <- matrix(s, n, n) # Units of time spent sampling per dyad.
-    est_adj <- matrix(0, n, n)
+    trait <- 1 + effect_size * metric + rnorm(n, sd=lm_sd)
+
+    # Sampling
+    d <- rpois(n^2, s)
+    d[d == 0] <- 1
     
-    for (i in 1:n) {
-      for (j in 1:n) {
-        est_adj[i, j] <- rpois(1, true_adj[i, j] * d[i, j])/d[i, j]
-      }
-    }
-    
-    est_adj <- est_adj * upper.tri(est_adj)
+    alpha_hat <- rpois(n^2, alpha*d)/d # Sampled rate.
     
     # Build network
-    net_est <- graph_from_adjacency_matrix(est_adj, mode="undirected", weighted=TRUE)
+    net_est <- graph_from_adjacency_matrix(matrix(alpha_hat, n, n), weighted=TRUE)
     
     metric_est <- strength(net_est)
-  
-    fit <- lm(trait ~ metric_est)
+    # fit_summary <- summary(lm(trait ~ metric_est))
     
-    coef_est <- fit$coefficients[[2]]
-    ev <- n/(n + b * sum(d^-1))
-   
-    results[nrow(results) + 1, ] <- c(a, b, s, pval, effect_size, correct, ev, coef_true/coef_est) 
+    fit_summary <- node_regression(metric_est, trait)
+    # qplot(trait, metric_est)
+    
+    pval <- fit_summary$pval
+    
+    # if (dim(fit_summary$coefficients)[1] == 2) {
+    #   pval <- summary(lm(trait ~ metric_est))$coefficients[2, 4]
+    # } else {
+    #   pval = NA
+    # }
+    
+    correlation <- cor(alpha, alpha_hat)
+    
+    results[nrow(results) + 1, ] <- c(rho, correlation, pval, s, n, r)
   }
-  # pval <- summary(fit)$coefficient[2, 4]
-  
-  # results[nrow(results) + 1, ] <- c(s, abs(coef_true - coef_est), ev, pval)
-  
-  # lo <- loess(pval ~ sampling, results)
-  # elbow_sampling <- sampling_sizes[which.max(diff(predict(lo, sampling_sizes), differences=2))]
-  # 
-  # plot(predict(lo, sampling_sizes), type="l")
-  # plot(results$sampling, results$pval, type="l")
-  
-  # pval_elbow <- mean(results[results$sampling == elbow_sampling, "ev"])
-  
-  # if (effect_size == 0) {
-  #   correct <- pval > 0.05
-  # } else {
-  #   correct <- pval < 0.05
-  # }
-  
-  
-  
   setTxtProgressBar(pb, net_id)
 }
 
 close(pb)
 
-results
+results <- na.omit(results)
+
+write.csv(results, "results/node_regression_power_100.csv")
 ```
 
-```{r}
-#coef_true, pval_true, coef_est, pval_est, ev, s
-
-results_rval <- data.frame(n=numeric(), p=numeric(), effect_size=numeric(), r=numeric(), power=numeric())
-
-for (iteration in 1:100) {
-  print(iteration)
-
-  results <- data.frame(net_id=numeric(), ev=numeric(), s=numeric(), a=numeric(), b=numeric(), power=numeric(), corr=numeric())
-  
-  n <- sample(seq(10, 50, 10), size=1)
-  p <- sample(c(0.10, 0.20), size=1)
-  
-  # effect_size <- sample(c(0, 1), size=1)
-  effect_size <- 1
-  
-  # a <- 10
-  # b <- 10
-  # s <- sample(5:125, size=1)
-  
-  for (net_id in 1:100) {
-    print(net_id)
-    
-    cv <- runif(1, 0, 1)
-    mu <- runif(1, 0, 100)
-    
-    a <- 1/cv**2
-    b = a/mu
-    
-    df <- data.frame(p=numeric(), s=numeric(), cor_est=numeric())
-    
-    true_adj <- matrix((p < runif(n^2)) * rgamma(n^2, a, b), n, n)
-    true_adj <- true_adj * upper.tri(true_adj)
-    
-    net <- graph_from_adjacency_matrix(true_adj, mode="undirected", weighted=TRUE)
-    
-    metric <- strength(net)
-    metric <- (metric - mean(metric))/sd(metric)
-    trait <- effect_size * metric + rnorm(n, sd=4)
-    
-    fit_summary <- summary(lm(trait ~ metric))
-    coef_true <- fit_summary$coefficients[2, 1]
-    pval_true <- fit_summary$coefficients[2, 4]
-    
-    for (s in seq(1, 50, 1)) {
-      for (iter in 1:5) {
-        # results <- data.frame(sampling=numeric(), coef_est=numeric(), ev=numeric(), pval=numeric())
-        
-            # Sampling
-        d <- matrix(s, n, n) # Units of time spent sampling per dyad.
-  
-        est_adj <- matrix(rpois(n ** 2, as.vector(true_adj) * as.vector(d))/as.vector(d), n, n)
-        
-        # for (i in 1:n) {
-        #   for (j in 1:n) {
-        #     est_adj[i, j] <- rpois(1, true_adj[i, j] * d[i, j])/d[i, j]
-        #   }
-        # }
-        # 
-        # est_adj <- est_adj * upper.tri(est_adj)
-        
-        # Build network
-        net_est <- graph_from_adjacency_matrix(est_adj, mode="undirected", weighted=TRUE)
-        
-        metric_est <- strength(net_est)
-        
-        fit_summary <- summary(lm(trait ~ metric_est))
-        
-        dim(fit_summary$coefficients)
-        
-        coef_est <- fit_summary$coefficients[2, 1]
-        pval_est <- fit_summary$coefficients[2, 4]
-        
-        # fit <- lm(trait ~ metric_est)
-        
-        # coef_est <- fit$coefficients[[2]]
-        cor_est <- sqrt(length(d)/(length(d) + b * sum(d^-1)))
-       
-        # results[nrow(results) + 1, ] <- c(net_id, coef_true, pval_true, coef_est, pval_est, ev, s)
-        df[nrow(df) + 1, ] <- c(pval_est, s, cor_est)
-      }
-    }
-    
-    
-    df_agg = aggregate(df$p, by=list(s=df$s), FUN=function(x) mean(x < 0.05))
-    
-    df_agg$cor_mean <- aggregate(df$cor_est, by=list(s=df$s), FUN=mean)$x
-    
-    df_agg
-  
-    # ggplot(df_agg, aes(x=sample_size)) +
-    #   geom_point(aes(y=x , color=0)) +
-    #   geom_smooth(aes(y=x, color=0)) +
-    #   # geom_line(aes(y=ev, color=1)) +
-    #   # geom_line(aes(y= 0.05)) +
-    #   ylim(0, 1)
-    
-    d_ <- df_agg[which.max(df_agg$x), ]$s
-    ev_ <- d_/(b + d_)
-    results[nrow(results) + 1, ] <- c(net_id, ev_, d_, a, b, max(df_agg$x), df_agg$cor_mean[which.max(df_agg$x)])
-    # print(ev_)
-  }
-  
-  loss <- function(r) {
-    if (r > 1 || r < 0) {
-      return (Inf)
-    }
-    ev_ <- (sqrt(results$b/r) - results$b)/(sqrt(results$b/r))
-    sum((results$ev - ev_)**2)
-  }
-  
-  optim_obj <- suppressWarnings(optim(c(1e-2), loss))
-  r <- optim_obj$par # 0.03460156 for n = 20, eff = 1;  for n = 40, eff = 1; 0.04361719 for n = 20, eff = 5.
-  results_rval[nrow(results_rval) + 1, ] <- c(n, p, effect_size, r, mean(results$power))
-}
-
-# ev_ <- (sqrt(results$b/r) - results$b)/(sqrt(results$b/r))
-
-results_rval
-
-```
+## Plot results of main simulations.
 
 ```{r}
-qplot(results$corr, results$power)
-```
+results <- read.csv("results/node_regression_power_100.csv")
+results <- subset(results, num_nodes != 200) # Pearson r calculation for n=200 failed, so exclude it.
 
-```{r}
-ggplot(results_rval, aes(x=r, y=power)) +
-  geom_point() +
-  geom_smooth(method="lm")
-```
+results_agg <- aggregate(pval ~ rho + samples + num_nodes + pearson_r, results, function(x) mean(x < 0.05))
 
-```{r}
-
-results <- data.frame(net_id=numeric(), ev=numeric(), s=numeric(), a=numeric(), b=numeric(), power=numeric(), corr=numeric())
-  
-n <- sample(seq(10, 50, 10), size=1)
-p <- sample(c(0.10, 0.20), size=1)
-
-effect_size <- 1
-
-for (net_id in 1:100) {
-  print(net_id)
-  
-  cv <- runif(1, 0, 1)
-  mu <- runif(1, 0, 100)
-  
-  a <- 1/cv**2
-  b = a/mu
-  
-  df <- data.frame(p=numeric(), s=numeric(), cor_est=numeric())
-  
-  true_adj <- matrix((p < runif(n^2)) * rgamma(n^2, a, b), n, n)
-  true_adj <- true_adj * upper.tri(true_adj)
-  
-  net <- graph_from_adjacency_matrix(true_adj, mode="undirected", weighted=TRUE)
-  
-  metric <- strength(net)
-  metric <- (metric - mean(metric))/sd(metric)
-  trait <- effect_size * metric + rnorm(n, sd=4)
-  
-  fit_summary <- summary(lm(trait ~ metric))
-  coef_true <- fit_summary$coefficients[2, 1]
-  pval_true <- fit_summary$coefficients[2, 4]
-  
-  for (s in seq(1, 50, 1)) {
-    for (iter in 1:20) {
-
-      # Sampling
-      d <- matrix(s, n, n) # Units of time spent sampling per dyad.
-
-      est_adj <- matrix(rpois(n ** 2, as.vector(true_adj) * as.vector(d))/as.vector(d), n, n)
-      
-      # for (i in 1:n) {
-      #   for (j in 1:n) {
-      #     est_adj[i, j] <- rpois(1, true_adj[i, j] * d[i, j])/d[i, j]
-      #   }
-      # }
-      # 
-      # est_adj <- est_adj * upper.tri(est_adj)
-      
-      # Build network
-      net_est <- graph_from_adjacency_matrix(est_adj, mode="undirected", weighted=TRUE)
-      
-      metric_est <- strength(net_est)
-      
-      fit_summary <- summary(lm(trait ~ metric_est))
-      
-      dim(fit_summary$coefficients)
-      
-      coef_est <- fit_summary$coefficients[2, 1]
-      pval_est <- fit_summary$coefficients[2, 4]
-      
-      # fit <- lm(trait ~ metric_est)
-      
-      # coef_est <- fit$coefficients[[2]]
-      cor_est <- sqrt(length(d)/(length(d) + b * sum(d^-1)))
-     
-      # results[nrow(results) + 1, ] <- c(net_id, coef_true, pval_true, coef_est, pval_est, ev, s)
-      df[nrow(df) + 1, ] <- c(pval_est, s, cor_est)
-    }
-  }
-  
-  
-  df_agg = aggregate(df$p, by=list(s=df$s), FUN=function(x) mean(x < 0.05))
-  
-  df_agg$cor_mean <- aggregate(df$cor_est, by=list(s=df$s), FUN=mean)$x
-  
-  df_agg
-
-  # ggplot(df_agg, aes(x=sample_size)) +
-  #   geom_point(aes(y=x , color=0)) +
-  #   geom_smooth(aes(y=x, color=0)) +
-  #   # geom_line(aes(y=ev, color=1)) +
-  #   # geom_line(aes(y= 0.05)) +
-  #   ylim(0, 1)
-  
-  d_ <- df_agg[which.max(df_agg$x), ]$s
-  ev_ <- d_/(b + d_)
-  results[nrow(results) + 1, ] <- c(net_id, ev_, d_, a, b, max(df_agg$x), df_agg$cor_mean[which.max(df_agg$x)])
-  # print(ev_)
-}
-
-```
-
-```{r}
-qplot(results$corr, results$power) +
-  geom_smooth(method="lm")
-```
-
-```{r}
-# We need to know how correlation and power are linked.
-# So we need to generate data with parameters from a random search.
-# Then we 
-
-a <- 10
-b <- 10
-d <- 100000000
-a/b
-
-a * (b + d)/(b * d)
-
-
-
-
-```
-
-
-```{r}
-# b_ <- results$b
-# ev_ <- (sqrt(b_/5e-2) - b_)/(sqrt(b_/5e-2))
-
-loss <- function(r) {
-  if (r > 1 || r < 0) {
-    return (Inf)
-  }
-  ev_ <- (sqrt(results$b/r) - results$b)/(sqrt(results$b/r))
-  sum((results$ev - ev_)**2)
-}
-
-optim_obj <- optim(c(1e-2), loss)
-r <- optim_obj$par # 0.03460156 for n = 20, eff = 1;  for n = 40, eff = 1; 0.04361719 for n = 20, eff = 5.
-
-ev_ <- (sqrt(results$b/r) - results$b)/(sqrt(results$b/r))
-
-# Minimum explained variance levels required to get maximal statistical power and corresponding sampling effort.
-ggplot(data=results, aes(x=b, y=ev)) +
-  geom_point() +
+ggplot(results_agg, aes(x=rho, y=pval, color=as.factor(num_nodes))) +
+  geom_point(size=1) + 
+  xlab("Correlation") +
+  ylab("Power") +
+  xlim(0, 1) +
+  ylim(0, 1) +
   geom_smooth() +
-  geom_line(aes(y=ev_))
+  scale_color_manual(values=c(cp[4], cp[5], cp[6], cp[8])) +
+  # scale_color_brewer(palette="Spectral") +
+  theme_classic() +
+  theme(legend.position = c(0.9, 0.25)) +
+  labs(color="# nodes")
 
+ggsave("figures/power.png", width=7, height=5)
 ```
 
-```{r}
-df_agg = aggregate(results$pval_est, by=list(sample_size=results$s), FUN=function(x) mean(x < 0.05))
-
-ggplot(df_agg, aes(x=sample_size)) +
-  geom_point(aes(y=x , color=0)) +
-  geom_smooth(aes(y=x, color=0)) +
-  # geom_line(aes(y=ev, color=1)) +
-  # geom_line(aes(y= 0.05)) +
-  ylim(0, 1)
-
-d_ <- df_agg[which.max(df_agg$x), ]$sample_size
-d_/(b + d_)
-```
+### 
 
 ```{r}
-ev <- df_agg$ev
-plot(ev)
-sqrt(b/1e-3) - b
-```
+# Do this for each n (or r).
+power_levels <- seq(0.1, 0.9, 0.1)
+power_table <- matrix(0, nrow=length(pearson_rs$n), ncol=length(power_levels))
+rownames(power_table) <- pearson_rs$n
+colnames(power_table) <- power_levels
 
-```{r}
-b <- seq(1, 10, 0.1)
-
-d_ <- sqrt(b/1e-3) - b # Estimated sample size
-d_
-
-ev_ <- d_/(b + d_)
-ev_
-
-subset(df_agg, s==round(d_))$coef_diff[1]
-
-plot(b, ev_)
-```
-```{r}
-results <- data.frame(a=numeric(), b=numeric(), coef_diff=numeric(), ev=numeric(), s=numeric())
-
-for (net in 1:1000) {
-  n <- 20
-  p <- 0.2
-  
-  # effect_size <- sample(c(0, 1), size=1)
-  effect_size <- 1
-  
-  a <- runif(1, 0, 5)
-  b <- runif(1, 0, 5)
-  
-  true_adj <- matrix((p < runif(n^2)) * rgamma(n^2, a, b), n, n)
-  true_adj <- true_adj * upper.tri(true_adj)
-  
-  net <- graph_from_adjacency_matrix(true_adj, mode="undirected", weighted=TRUE)
-  
-  metric <- strength(net)
-  trait <- effect_size * metric + rnorm(n, sd=1)
-  
-  coef_true <- lm(trait ~ metric)$coefficients[[2]]
-  
-  s <- sqrt(b/1e-3) - b
-  # s <- sample(1:100, 1)
-  
-  for (iter in 1:10) {
-    # Sampling
-    d <- matrix(s, n, n) # Units of time spent sampling per dyad.
-    est_adj <- matrix(0, n, n)
+for (i in 1:length(pearson_rs$n)) {
+  for (j in 1:length(power_levels)) {
+    n <- pearson_rs$n[i]
+    power <- power_levels[j]
+    lo <- loess(rho ~ pval, subset(results_agg, num_nodes==n))
+    rho_ <- predict(lo, power)
     
-    for (i in 1:n) {
-      for (j in 1:n) {
-        est_adj[i, j] <- rpois(1, true_adj[i, j] * d[i, j])/d[i, j]
-      }
-    }
-    
-    est_adj <- est_adj * upper.tri(est_adj)
-    
-    # Build network
-    net_est <- graph_from_adjacency_matrix(est_adj, mode="undirected", weighted=TRUE)
-    
-    metric_est <- strength(net_est)
-  
-    fit <- lm(trait ~ metric_est)
-    
-    coef_est <- fit$coefficients[[2]]
-    ev <- length(d)/(length(d) + b * sum(d^-1))
-   
-    # results[nrow(results) + 1, ] <- c(coef_true - coef_est, ev, s)
+    power_table[i, j] <- round(rho_, 4)
+    # cat(paste("Number of nodes:", n, " Rho required: ", rho_, "\n"))
   }
-  results[nrow(results) + 1, ] <- c(a, b, coef_true - coef_est, ev, s)
 }
 
-results
+power_table
+write.csv(power_table, "results/power_table.csv")
 ```
 
+## Sampling requirements
+
 ```{r}
-ggplot(results, aes(x=s, y=coef_diff)) +
-  geom_point()
+S <- c(0.05, 0.2, 0.5, 0.8, 1.0)
+N <- c("10", "20", "50", "100")
+
+sampling_requirements <- matrix(0, nrow=5, ncol=4)
+rownames(sampling_requirements) <- S
+colnames(sampling_requirements) <- c("10", "20", "50", "100")
+
+for (i in 1:length(N)) {
+  rho_ <- power_table[N[i], "0.8"]
+  I <- rho_^2/(S^2 * (1 - rho_^2))
+  sampling_requirements[, i] <- ceiling(I)
+}
+
+sampling_requirements
+write.csv(sampling_requirements, "results/sampling_requirements.csv")
 ```
 
-```{r}
-mean(na.omit(results$coef_diff))
-```
+## Power for given correlation at different network sizes.
 
 ```{r}
-ggplot(results, aes(x=cut(ev, breaks=10), y=coef_diff)) +
-  geom_boxplot() +
-  coord_cartesian(ylim=c(0, 10))
+lo <- loess(pval ~ rho, subset(results_agg, num_nodes==50))
+predict(lo, 0.5)
 
-ggplot(results, aes(x=cut(s, breaks=10), y=coef_diff)) +
-  geom_boxplot() +
-  coord_cartesian(ylim=c(0, 10))
-```
-
-```{r}
-1 - sqrt(100 * 1e-3)
-```
-
-```{r}
-ggplot(results, aes(x=as.factor(correct), y=ev)) +
-  geom_boxplot()
-
-ggplot(results, aes(x=as.factor(correct), y=s)) +
-  geom_boxplot()
-```
-
-```{r}
-b <- seq(1, 20, 0.1)
-d <- sqrt(b/1e-3) - b
-qplot(b, d)
-```
-
-```{r}
-ggplot(results_net, aes(x=b, y=sampling_elbow, color=as.factor(n))) +
-  geom_point() +
-  geom_line(aes(y=sqrt(results_net$b/0.01) - results_net$b))
-```
-
-```{r}
-ggplot(results_net, aes(x=b, y=pval_elbow, color=as.factor(net_id))) +
-  geom_point()
-```
-
-```{r}
-
-```
-
-```{r}
-pred_ev <- 0.88 - 0.13 * log(results_net$b) - 0.13 * log(10)
-
-ggplot(results_net, aes(x=b, y=pval_elbow)) +
-  geom_point() +
-  geom_line(aes(y=pred_ev))
-
-ggplot(results_net, aes(x=b, y=coef_elbow)) +
-  geom_point() +
-  geom_line(aes(y=pred_ev))
-```
-
-```{r}
-pred_ev <- 0.88 - 0.13 * log(results_net$b) - 0.13 * log(results_net$n)
-qplot(results_net$b, results_net$coef_elbow) +
-  geom_line(aes(y=pred_ev))
-
-
-lm(coef_elbow ~ log(b) + log(n),data=results_net)
-
-
-confint(lm(results_net$pval_elbow ~ log(results_net$b)))
-
-
-```
-
-```{r}
-x <- runif(100)
-hmean <- function(x) length(x)/sum(x^(-1))
-hmean(x)
-mean(x)
-hmean(10*x) - hmean(x) * 10
-```
-
-```{r}
-
-```
-
-```{r}
-b <- 5
-d <- seq(0, 100, 0.1)
-plot(d, d/(b + d),  type="l")
-
-plot(diff(d/(b + d), differences=2), type="l")
-```
-
-```{r}
-x1 <- rnorm(10, mean=-1)
-x2 <- rnorm(10, mean=1)
-t <- (mean(x1) - mean(x2))/(sqrt(2/n) * sqrt(0.5 * (var(x1) + var(x2))))
-t
-t.test(x1, x2)
+lo <- loess(pval ~ rho, subset(results_agg, num_nodes==100))
+predict(lo, 0.5)
 ```
