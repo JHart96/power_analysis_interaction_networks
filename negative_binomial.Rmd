@@ -7,96 +7,26 @@ output:
     df_print: paged
 ---
 
-## Derivation
-
-If we assume the population association rates $\lambda_i$ are gamma-distributed, we have:
-$$
-\lambda_i \sim \text{Gamma}(\alpha, \beta).
-$$
-where $\alpha, \beta$ are the population-level parameters.
-
-The observed number of interactions $X_i$ for the $i$-th dyad is likely to be Poisson-distributed, and will depend on the number of times the dyad were observed $d_i$. This gives us:
-$$
-X_i \sim \text{Poisson}(d_i \lambda_i) .
-$$
-Since $d_i$ is a constant, the distribution of $d_i \lambda_i$ is given by
-$$
-d_i \lambda_i \sim \text{Gamma}\left(\alpha, \frac{\beta}{d_i}\right).
-$$
-This kind of model is known as a Poisson-Gamma mixture, and can be described by the negative binomial in terms of the gamma parameters $\alpha, \beta$, and the sampling effort $d_i$:
-
-$$
-X_i \sim \text{NegBinomial}\left(\alpha, \frac{\beta}{\beta + d_i}\right).
-$$
-
-Typically when we estimate the association rate, we compute 
-$$
-\hat{\lambda_i} = \frac{X_i}{d_i}.
-$$
-
-Our aim is to compute the total variance in the estimated association rates $\hat{\lambda}_i$ explained by the total variance in the true association rates $\lambda_i$, that is:
-$$
-\text{EV} = \frac{\sum_{i=1}^n \text{Var}(\hat{\lambda}_i)}{\sum_{i=1}^n \text{Var}(\lambda_i)} = \frac{\hat{T}}{T}
-$$
-First, the variance of the true association rate is simply given by the variance of the gamma distribution:
-$$
-\text{Var}(\lambda_i) = \frac{\alpha}{\beta^2}.
-$$
-
-Summing over $n$ dyads we get
-$$
-T = \sum_{i=1}^n \text{Var}(\lambda_i) = \frac{n \alpha}{\beta^2}.
-$$
-
-The variance of the estimated association rates is slightly trickier, we use the variance of the negative binomial to get:
-$$
-\begin{aligned}
-\text{Var}(\hat{\lambda_i})  &= \text{Var} \left( \frac{X_i}{d_i}\right) \\ &= \frac{1}{d_i^2} \text{Var}(X_i) \\ &= \frac{\alpha d_i (\beta + d_i)}{d_i^2\beta^2}.
-\end{aligned}
-$$
-
-Again, summing over the $n$ dyads we get
-$$
-\begin{aligned}
-\hat{T} &= \sum_{i=1}^n \text{Var}(\hat{\lambda}_i) \\ &=\sum_{i=1}^n \frac{\alpha d_i (\beta + d_i)}{d_i^2 \beta^2} \\ &= \frac{\alpha}{\beta^2} \sum_{i=1}^n \left(\frac{d_i^2 + d_i \beta}{d_i^2} \right) \\ &= \frac{\alpha}{\beta^2} \sum_{i=1}^n \left(1 + \frac{\beta}{d_i}\right) \\ &= \frac{\alpha}{\beta^2} \left(n + \beta \sum_{i=1}^n d_i^{-1}\right).
-\end{aligned}
-$$
-
-Bringing these together, we get:
-$$
-\begin{aligned}
-\text{EV} & = T\hat{T}^{-1} \\&= \frac{n\alpha}{\beta^2} \frac{\beta^2}{\alpha} \left(n + \beta \sum_{i=1}^n d_i^{-1}\right)^{-1} \\&= \frac{n}{n + \beta \sum_{i=1}^n d_i^{-1}}.
-\end{aligned}
-$$
-
-The coefficient of variation/social differentiation of the interaction rate under this method is:
-$$
-S_\lambda = \text{CV}(\lambda) = \frac{\sigma(\lambda)}{\mu(\lambda)} = \sqrt{\frac{\alpha}{\beta^2}} \frac{\beta}{\alpha} = \frac{1}{\sqrt{\alpha}}.
-$$
-
-This is unexpected, since under the binomial model, increases in social differentiation increase explained variance/social differentiation.
-
-## Simulations
-
 Load in ggplot for visualisations.
 
 ```{r setup}
 knitr::opts_chunk$set(cache = TRUE)
 library(ggplot2)
-cp <- c("#617899", "#38acaf", "#6fda97")
+
+cp <- c("#003f5c", "#2f4b7c", "#665191", "#a05195", "#d45087", "#f95d6a", "#ff7c43", "#ffa600")
 ```
 
 Define log-likelihood function of negative binomial with gamma parameters (in conjugate form) so we can estimate the parameters and their upper and lower bounds.
 
 ```{r}
 # Log-likelihood function of negative binomial with gamma parameterisation. Parameters have gamma priors.
-lk.nbinom <- function(par, x, d, priors=list(a=c(1, 0.5), b=c(1, 0.5))) {
+lk.nbinom <- function(par, x, d) {
   if (min(par) < 0) {
     return(-Inf)
   }
   r <- par[1]
   p <- par[2]/(par[2] + d)
-  sum(dnbinom(x, r, p, log=TRUE))#  + dgamma(par[1], priors$a[1], priors$a[2], log=TRUE) + dexp(par[2], 1e-2, log=TRUE)# dgamma(par[2], priors$b[1], priors$b[2], log=TRUE)
+  sum(dnbinom(x, r, p, log=TRUE))
 }
 
 # Gibbs sampler. target is function accepting parameter vector. initial is starting vector, to be accepted by target.
@@ -122,92 +52,44 @@ gibbs <- function(target, initial, iterations=10000, warmup=2000, thin=100) {
   }
   return(chain[seq(warmup, iterations + warmup, thin), ])
 }
+
+estimate_correlation <- function(x, d) {
+  target <- function(par) lk.nbinom(par, x, d)
+  parameters <- optim(c(1, 1), function(par) -target(par))$par
+  
+  a_ <- parameters[1]
+  b_ <- parameters[2]
+  
+  S <- 1/sqrt(a_)
+  mu <- a_/b_
+  
+  I <- mu * hmean(d)
+  
+  list(cor=(S * sqrt(I))/sqrt(1 + S^2 * I), S=S, I=I)
+}
 ```
 
 Define a simulation function to compute the true and estimated correlations and explained variances for a generic data generation function.
 
 ```{r}
 # Simulate data collection and compute estimated and true correlation and explained variance. 
-run_simulations <- function (iterations, generate_data, plot_chains=FALSE) {
+run_simulations <- function (iterations, generate_data) {
   # Create empty data frame to put results in.
-  results <- data.frame(
-    mean_sampling=numeric(), 
-    cors_true=numeric(), 
-    cors_est=numeric(), 
-    cors_est_lb=numeric(), 
-    cors_est_ub=numeric(), 
-    evs_true=numeric(),
-    evs_est=numeric(),
-    evs_est_lb=numeric(),
-    evs_est_ub=numeric(),
-    a=numeric(),
-    b=numeric(),
-    cv_true=numeric()
-  )
+  results <- data.frame(cors_true=numeric(), cors_est=numeric())
   
   for (i in 1:iterations) {
-    # print(i)
-    
     # Generate data
     data <- generate_data()
-    
     alpha <- data$alpha
     alpha_hat <- data$alpha_hat
     d <- data$d
-    mean_sampling <- data$mean_sampling
-    a = data$a
-    b = data$b
-    
-    n <- length(alpha)
     
     # Compute true correlation between actual and sampled rates.
-    ev_true <- var(alpha)/var(alpha_hat)
     cor_true <- cor(alpha, alpha_hat)
-    cv_true <- sd(alpha)/mean(alpha)
+    cor_est <- estimate_correlation(alpha_hat * d, d)$cor
     
-    # Gibbs sample the log-likelihood of the negative binomial.
-    target <- function(par) lk.nbinom(par, as.integer(alpha_hat * d), d)
-    # chain <- gibbs(target, c(1, 1), warmup=2000, iterations=10000, thin=10)
     
-    parameters <- optim(c(1, 1), function(par) -target(par))$par
-    a_ <- parameters[1]
-    b_ <- parameters[2]
-
-    # if (plot_chains) {
-    #   # Plot the chains for visual inspection.
-    #   plot(chain[, 1], type="l", col=1, ylim=c(0, max(chain)))
-    #   lines(chain[, 2], type="l", col=2)
-    # }  
-    # 
-    # # Compute quantiles of b parameter for explained variance calculation.
-    # qt <- quantile(chain[, 2], probs=c(0.025, 0.5, 0.975))
-    # 
-    # a_ <- median(chain[, 1])
-    # b_ <- qt[2]
-    # b_lb <- qt[1]
-    # b_ub <- qt[3]
-    
-    # Compute estimated explained variance and estimated correlation.
-    ev_est <- n/(n + b_ * sum(d^-1))
-    
-    # ev_est_lb <- n/(n + b_lb * sum(d^-1))
-    # ev_est_ub <- n/(n + b_ub * sum(d^-1))
-    
-    ev_est_lb <- 0
-    ev_est_ub <- 0
-    
-    S <- 1/sqrt(a_)
-    
-    G <- mean(alpha_hat * d)
-    cor_est <- sqrt(1/(1 + 1/(S^2 * G)))
-    cor_est_lb <- 0
-    cor_est_ub <- 0
-    
-    # cor_est <- sqrt(ev_est)
-    # cor_est_lb <- sqrt(ev_est_lb)
-    # cor_est_ub <- sqrt(ev_est_ub)
-    
-    results[nrow(results) + 1, ] <- c(mean_sampling, cor_true, cor_est, cor_est_lb, cor_est_ub, ev_true, ev_est, ev_est_lb, ev_est_ub, a, b, cv_true)
+    results[nrow(results) + 1, ] <- c(cor_true, cor_est)
   }
   
   results
@@ -226,16 +108,13 @@ generate_data_poisson <- function() {
   m <- sample(c(10, 20, 50, 100), size=1)^2 # Number of dyads
   
   # Random mean sampling effort.
-  mean_sampling <- runif(1, 10, 1000)
+  mean_sampling <- runif(1, 1, 10)
   
-  # Generate population parameters for gamma using mean interaction rate and desired network correlation.
-  # mu <- runif(1, 1, 10)
-  # rho <- runif(1, 0, 1.0)
-  # b <- mean_sampling * (1 - rho^2)/rho^2
-  # a <- b * mu
-  
-  cv <- runif(1, 0, 0.2)
+  cv <- runif(1, 0, 2)
   mu <- runif(1, 0, 10)
+  
+  pi <- runif(1, 0, 1)
+  
   a <- 1/cv**2
   b = a/mu
   
@@ -245,6 +124,37 @@ generate_data_poisson <- function() {
   
   # Generate association rates.
   alpha <- rgamma(m, a, b) # Actual rate.
+  alpha_hat <- rpois(m, alpha*d)/d # Sampled rate.
+  list(alpha=alpha, alpha_hat=alpha_hat, d=d, mean_sampling=mean_sampling, a=a, b=b)
+}
+
+generate_data_poisson_zi <- function() {
+  m <- sample(c(10, 20, 50, 100), size=1)^2 # Number of dyads
+  
+  # Random mean sampling effort.
+  mean_sampling <- runif(1, 1, 10)
+  
+  # Generate population parameters for gamma using mean interaction rate and desired network correlation.
+  # mu <- runif(1, 1, 10)
+  # rho <- runif(1, 0, 1.0)
+  # b <- mean_sampling * (1 - rho^2)/rho^2
+  # a <- b * mu
+  
+  cv <- runif(1, 0, 2)
+  mu <- runif(1, 0, 1)
+  
+  pi <- runif(1, 0, 1)
+  
+  a <- 1/cv**2
+  b = a/mu
+  
+  # Variable sampling effort.
+  d <- rpois(m, mean_sampling) # Individual sampling efforts.
+  d[d == 0] = 1 # Avoids division by zero error.
+  
+  # Generate association rates.
+  alpha <- rgamma(m, a, b) # Actual rate.
+  alpha[runif(m) < (1 - pi)] <- 0
   alpha_hat <- rpois(m, alpha*d)/d # Sampled rate.
   list(alpha=alpha, alpha_hat=alpha_hat, d=d, mean_sampling=mean_sampling, a=a, b=b)
 }
@@ -284,7 +194,7 @@ generate_data_sbm <- function() {
   list(alpha=alpha, alpha_hat=alpha_hat, d=d, mean_sampling=mean_sampling, a=NA, b=b)
 }
 
-# Generate data using an exponential.
+# Generate data using a beta interaction rate, and Poisson count.
 generate_data_beta <- function() {
   m <- sample(c(5, 10, 20, 50, 100), size=1)^2 # Number of dyads
   
@@ -309,14 +219,61 @@ generate_data_beta <- function() {
   list(alpha=alpha, alpha_hat=alpha_hat, d=d, mean_sampling=mean_sampling, a=a, b=b)
 }
 
+# Generate data using a beta interaction rate, and binomial count.
+generate_data_betabin <- function() {
+  m <- sample(c(5, 10, 20, 50, 100), size=1)^2 # Number of dyads
+  
+  # Random mean sampling effort.
+  mean_sampling <- runif(1, 1, 100)
+  
+  # Generate population parameters for gamma using mean interaction rate and desired network correlation.
+  mu <- runif(1, 0, 1)
+  cv <- runif(1, 0, min(1.00, sqrt(1/mu - 1)))
+  
+  a <- (1 - mu - cv^2*mu)/cv^2
+  b <- (cv^2 * mu * (mu - 1) + mu * (mu - 2) + 1)/(cv^2 * mu)
+  
+  # Variable sampling effort.
+  d <- rpois(m, mean_sampling) # Individual sampling efforts.
+  d[d == 0] = 1 # Avoids division by zero error.
+  
+  # Generate association rates.
+  alpha <- rbeta(m, a, b) # Actual rate.
+  # alpha <- runif(m, min=0, max=10)
+  alpha_hat <- rbinom(m, d, alpha)/d # Sampled rate.
+  list(alpha=alpha, alpha_hat=alpha_hat, d=d, mean_sampling=mean_sampling, a=a, b=b)
+}
+
+generate_data_poisson_biased <- function() {
+  m <- sample(c(10, 20, 50, 100), size=1)^2 # Number of dyads
+  
+  cv <- runif(1, 0, 2)
+  mu <- runif(1, 0, 10)
+  
+  pi <- runif(1, 0, 1)
+  
+  a <- 1/cv**2
+  b = a/mu
+  
+  # Variable sampling effort.
+  k <- round(m/2)
+  d <- c(rpois(k, runif(1, 1, 10)), rpois(m - k, runif(1, 10, 100)))
+  d[d == 0] = 1 # Avoids division by zero error.
+  
+  # Generate association rates.
+  alpha <- rgamma(m, a, b) # Actual rate.
+  alpha_hat <- rpois(m, alpha*d)/d # Sampled rate.
+  list(alpha=alpha, alpha_hat=alpha_hat, d=d, mean_sampling=NA, a=a, b=b)
+}
 ```
 
 ## Poisson data
 
 ```{r}
-results.pois <- run_simulations(200, generate_data_poisson, plot_chains=FALSE)
+results.pois <- run_simulations(200, generate_data_poisson)
 write.csv(results.pois, "results/poisson.csv")
 ```
+
 
 ```{r}
 results <- read.csv("results/poisson.csv")
@@ -332,8 +289,8 @@ ggplot(results, aes(x=cors_true, y=cors_est)) +
   theme_classic()
 
 ggsave("figures/correlation_comparison_poisson.png", width=3, height=3)
-
 ```
+
 ```{r}
 cat("Mean: \n")
 mean(results$cors_true - results$cors_est)
@@ -346,7 +303,6 @@ cor(results$cors_true, results$cors_est)
 cat("Mean absolute error: \n")
 mean(abs(results$cors_true - results$cors_est))
 ```
-
 
 ## Community structured data
 
@@ -404,7 +360,7 @@ ggplot(results, aes(x=cors_true, y=cors_est)) +
   ylab("Estimated correlation") +
   theme_classic()
 
-ggsave("figures/correlation_comparison_beta.png", width=3, height=3)
+ggsave("figures/correlation_comparison_beta.png", width=6, height=4)
 ```
 
 ```{r}
@@ -420,37 +376,115 @@ cat("Mean absolute error: \n")
 mean(abs(results$cors_true - results$cors_est))
 ```
 
-## Binomial data
+## Zero-inflated Poisson data
 
 ```{r}
-results.norm <- run_simulations(100, generate_data_binom, plot_chains=FALSE)
-write.csv(results.norm, "results/norm.csv")
+results.pois.zi <- run_simulations(200, generate_data_poisson_zi)
+write.csv(results.pois.zi, "results/poisson_zi.csv")
 ```
 
 ```{r}
-results <- read.csv("results/norm.csv")
+results <- read.csv("results/poisson_zi.csv")
 
 ggplot(results, aes(x=cors_true, y=cors_est)) +
-  geom_point() +
-  geom_errorbar(aes(ymin=cors_est_lb, ymax=cors_est_ub)) +
-  geom_smooth() +
+  geom_point(color=cp[3], alpha=0.5) +
   geom_abline() +
+  geom_smooth(color=cp[8], size=1, se=FALSE) +
   xlim(0, 1) +
   ylim(0, 1) +
   xlab("True correlation") +
-  ylab("Estimated correlation")
+  ylab("Estimated correlation") +
+  theme_classic()
 
-ggplot(results, aes(x=evs_true, y=evs_est)) +
-  geom_point() +
-  geom_errorbar(aes(ymin=evs_est_lb, ymax=evs_est_ub)) +
-  geom_smooth() +
+ggsave("figures/correlation_comparison_poisson_zi.png", width=3, height=3)
+```
+
+```{r}
+cat("Mean: \n")
+mean(results$cors_true - results$cors_est)
+cat("Standard deviation: \n")
+sd(results$cors_true - results$cors_est)
+
+cat("Correlation: \n")
+cor(results$cors_true, results$cors_est)
+
+cat("Mean absolute error: \n")
+mean(abs(results$cors_true - results$cors_est))
+```
+
+## Beta binomial data
+
+```{r}
+results.norm <- run_simulations(200, generate_data_betabin)
+write.csv(results.norm, "results/betabin.csv")
+```
+
+```{r}
+results <- read.csv("results/betabin.csv")
+
+ggplot(results, aes(x=cors_true, y=cors_est)) +
+  geom_point(color=cp[3], alpha=0.5) +
   geom_abline() +
+  geom_smooth(color=cp[8], size=1, se=FALSE) +
   xlim(0, 1) +
   ylim(0, 1) +
-  xlab("True explained variance") +
-  ylab("Estimated explained variance")
+  xlab("True correlation") +
+  ylab("Estimated correlation") +
+  theme_classic()
 
-ggplot(results, aes(x=mean_sampling, y=abs(cors_true - cors_est))) +
-  geom_point() +
-  geom_smooth()
+ggsave("figures/correlation_comparison_betabin.png", width=6, height=4)
+```
+
+```{r}
+cat("Mean: \n")
+mean(results$cors_true - results$cors_est)
+cat("Standard deviation: \n")
+sd(results$cors_true - results$cors_est)
+
+cat("Correlation: \n")
+cor(results$cors_true, results$cors_est)
+
+cat("Mean absolute error: \n")
+mean(abs(results$cors_true - results$cors_est))
+```
+
+```{r}
+results.pois <- run_simulations(200, generate_data_poisson_biased)
+write.csv(results.pois, "results/poisson_biased.csv")
+```
+
+
+```{r}
+results <- read.csv("results/poisson_biased.csv")
+
+ggplot(results, aes(x=cors_true, y=cors_est)) +
+  geom_point(color=cp[3], alpha=0.5) +
+  geom_abline() +
+  geom_smooth(color=cp[8], size=1, se=FALSE) +
+  xlim(0, 1) +
+  ylim(0, 1) +
+  xlab("True correlation") +
+  ylab("Estimated correlation") +
+  theme_classic()
+
+ggsave("figures/correlation_comparison_poisson_biased.png", width=6, height=4)
+```
+
+```{r}
+cat("Mean: \n")
+mean(results$cors_true - results$cors_est)
+cat("Standard deviation: \n")
+sd(results$cors_true - results$cors_est)
+
+cat("Correlation: \n")
+cor(results$cors_true, results$cors_est)
+
+cat("Mean absolute error: \n")
+mean(abs(results$cors_true - results$cors_est))
+```
+
+```{r}
+?latent_space
+
+
 ```

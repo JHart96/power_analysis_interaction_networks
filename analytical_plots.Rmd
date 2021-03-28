@@ -7,7 +7,7 @@ output: html_notebook
 library(latex2exp)
 library(ggplot2)
 theme_set(theme_classic())
-cp <- c("#617899", "#38acaf", "#6fda97")
+cp <- c("#003f5c", "#2f4b7c", "#665191", "#a05195", "#d45087", "#f95d6a", "#ff7c43", "#ffa600")
 ```
 
 ```{r}
@@ -18,15 +18,15 @@ rho <- function(mu, S, D) (S * sqrt(mu * D))/(sqrt(1 + mu * S^2 * D))
 mu <- 1.0 # Mean interaction rate
 S <- seq(0, 1.0, 0.01) # Social differentiation
 
-I <- 10 # Interactions seen per dyad
+I <- 1 # Interactions seen per dyad
 D <- I/mu
 df_1 <- data.frame(cbind(mu, S, D))
 
-I <- 100 # Interactions seen per dyad
+I <- 10 # Interactions seen per dyad
 D <- I/mu
 df_2 <- data.frame(cbind(mu, S, D))
 
-I <- 1000 # Interactions seen per dyad
+I <- 100 # Interactions seen per dyad
 D <- I/mu
 df_3 <- data.frame(cbind(mu, S, D))
 
@@ -46,7 +46,7 @@ ggsave("figures/rho_S.png", height=3, width=4)
 
 ```{r}
 mu <- 1.0 # Mean interaction rate
-I <- seq(0, 1000, 1) # Interactions seen per dyad
+I <- seq(0, 100, 1) # Interactions seen per dyad
 D <- I/mu
 
 S <- 0.05
@@ -66,8 +66,8 @@ df$D <- as.factor(df$D)
 ggplot(df, aes(x=I, y=rho, color=as.factor(S))) +
   geom_line(size=1) +
   scale_color_manual(values = c(cp[4], cp[6], cp[8])) +
-  labs(x=TeX("Total interactions, $I$"), y=TeX("Correlation, $\\rho$"), color=TeX("$S$")) +
-  theme(legend.position = c(0.8, 0.3))
+  labs(x=TeX("Sampling effort, $I$"), y=TeX("Correlation, $\\rho$"), color=TeX("$S$")) +
+  theme(legend.position = c(0.8, 0.3), legend.background=element_rect(fill=alpha('white', 0.5)))
 
 ggsave("figures/rho_I.png", height=3, width=4)
 ```

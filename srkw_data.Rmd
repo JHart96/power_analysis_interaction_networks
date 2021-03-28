@@ -1,0 +1,38 @@
+---
+title: "SRKW Data"
+output: html_notebook
+---
+
+```{r}
+library(aninet)
+source("power_analysis.R")
+```
+
+```{r}
+X <- srkw_contact
+D <- srkw_sampling
+
+summary <- social_differentiation(X, D, method="Negative-binomial", directed=FALSE)
+summary
+
+?social_differentiation
+```
+
+```{r}
+n <- dim(X)[1] # Number of individuals
+s <- summary[4, 1] # Social differentiation
+mu <- mean(X[upper.tri(X)]) # Mean number of interactions
+
+for (r in c(0.1, 0.3, 0.5, 0.7, 0.9)) {
+  power <- power_analysis_nodal(n, r, s, mu, D, num_iters = 200, node_metric = "strength")
+  cat(paste("Effect size (r):", r, " Power (%):", round(power * 100, 0), "\n"))
+}
+```
+
+```{r}
+power_analysis_nodal(n, r, s, mu, D, num_iters = 200)
+```
+
+```{r}
+power_analysis_elbow(s, 0.99)
+```

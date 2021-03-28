@@ -3,6 +3,12 @@ title: "Elbow method for computing optimal network correlation"
 output: html_notebook
 ---
 
+```{r}
+library(ggplot2)
+theme_set(theme_classic())
+cp <- c("#003f5c", "#2f4b7c", "#665191", "#a05195", "#d45087", "#f95d6a", "#ff7c43", "#ffa600")
+```
+
 Load in results from node regression power analysis and fit a power predictor to it to predict power given correlation.
 
 ```{r}
@@ -16,51 +22,21 @@ lo_power <- loess(results_agg$pval ~ results_agg$rho)
 Define correlation function again.
 
 ```{r}
-rho <- function(mu, S, D) (S * sqrt(mu * D))/(sqrt(1 + mu * S^2 * D))
-```
-
-Compute elbow point and find the correlation & number of samples it corresponds to.
-
-```{r}
-elbow_points <- rep(0, 1)
-optimal_sampling <- rep(0, 1)
-
-# social_differentiations <- c(0.2, 0.5, 0.8)
-social_differentiations <- seq(1/2000, 1.0, 1/2000)
-
-for (i in 1:length(social_differentiations)) {
-  I <- seq(0, 10000, 1)
-  mu <- 10
-  D <- I/mu
-  S <- social_differentiations[i]
-  
-  rho_ <- rho(mu, S, D)
-  
-  theta <- atan2(max(rho_) - min(rho_), max(I) - min(I))
-  co = cos(theta)
-  si = sin(theta)
-  rotation_matrix = matrix(c(co, -si, si, co), nrow=2, ncol=2)
-  
-  rotated_data <- cbind(rho_, I) %*% rotation_matrix
-  
-  rho_prime <- rho_[which.max(rotated_data[, 1])] # Optimal rho, by diminishing returns principle.
-  
-  I_prime <- I[which.max(rotated_data[, 1])]
-  
-  elbow_points[i] <- rho_prime
-  optimal_sampling[i] <- I_prime
-}
-
-power <-predict(lo_power, elbow_points)
-power[power > 1] <- 1
+rho <- function(S, I) (S * sqrt(I))/(sqrt(1 + I * S^2))
 ```
 
 Plot social differentiation against optimal correlation, corresponding optimal sampling, and power at optimal correlation.
 
 ```{r}
-plot(social_differentiations, elbow_points, type="l") # CV vs correlation.
-plot(social_differentiations, power, type="l") # CV vs power.
-plot(social_differentiations, optimal_sampling, type="l") # CV vs optimal sampling.
+df_elbow_subset <- subset(df_elbow, threshold==0.99)
+df_elbow
+ggplot(df_elbow_subset, aes(x=S, y=I_prime)) +
+  geom_point(size=1) +
+  coord_cartesian(ylim=c(0, 200))
+
+# plot(social_differentiations, elbow_points, type="l") # CV vs correlation.
+# plot(social_differentiations, power, type="l") # CV vs power.
+# plot(social_differentiations, optimal_sampling, type="l") # CV vs optimal sampling.
 ```
 
 Simulate node regression for different numbers of samples to make sure optimal sampling is using minimum number of required samples.
@@ -80,7 +56,8 @@ for (net_id in 1:2000) {
   r <- pearson_rs[param_idx, ]$r
 
   cv <- runif(1, 0, 0.5)
-  mu <- runif(1, 0, 1)
+  # mu <- runif(1, 0, 1)
+  mu <- 1
   
   a <- 1/cv**2
   b = a/mu
@@ -94,7 +71,7 @@ for (net_id in 1:2000) {
 
   metric <- strength(net)
   
-  s <- sample(seq(100, 2500, 100), size=1)
+  s <- sample(seq(1, 500, 1), size=1)
 
   for (i in 1:num_repeats) {
     effect_size <- r * lm_sd * sqrt(1/(1 - r))/(sd(metric) * sqrt(r + 1))
@@ -141,22 +118,106 @@ results <- na.omit(results)
 write.csv(results, "results/node_regression_sample_size_100.csv")
 ```
 
-Plot number of samples against social differentiation with power level shown in colour. Overlay optimal sampling.
+Compute elbow point and find the correlation & number of samples it corresponds to.
 
 ```{r}
 results <- read.csv("results/node_regression_sample_size_100.csv")
 results_agg <- aggregate(pval ~ mu + cv + samples + num_nodes + pearson_r, results, function(x) mean(x < 0.05))
 
-ggplot(results_agg, aes(x=cv, y=samples, color=cut(pval, breaks=4))) +
-  geom_point() +
-  geom_line(aes(x=social_differentiations[2:2001], y=optimal_sampling[2:2001]), color="black", size=1) +
-  xlim(0, 0.5) +
-  scale_color_manual(values = c(cp[4], cp[5], cp[6], cp[8])) +
-  theme(legend.position = c(0.8, 0.7))
+df_elbow <- data.frame(rho_prime=numeric(), I_prime=numeric(), S=numeric(), threshold=numeric(), n=numeric())
 
-# ggsave("figures/elbow_samples.png", width=5, height=5)
+social_differentiations <- results_agg$cv
+n <- results_agg$num_nodes
+
+for (threshold in c(0.90, 0.99, 0.999)) {
+  for (i in 1:length(social_differentiations)) {
+    I <- seq(0, 100000, 1) # Choosing a maximum value here is difficult. It is the maximum mean number of interactions seen per dyad.
+    S <- social_differentiations[i]
+    
+    rho_ <- rho(S, I)
+    
+    rho_argmax <- which.min(abs(rho_ - threshold))
+    max_rho_ <- rho_[rho_argmax]
+    max_I <- I[rho_argmax]
+    
+    theta <- atan2(max_rho_, max_I)
+    co = cos(theta)
+    si = sin(theta)
+    rotation_matrix = matrix(c(co, -si, si, co), nrow=2, ncol=2)
+    
+    rotated_data <- cbind(rho_, I) %*% rotation_matrix
+    
+    rho_prime <- rho_[which.max(rotated_data[, 1])] # Optimal rho, by diminishing returns principle.
+    
+    I_prime <- I[which.max(rotated_data[, 1])] # Corresponding optimal sampling effort.
+    
+    df_elbow[nrow(df_elbow) + 1, ] <- c(rho_prime, I_prime, S, threshold, n[i])
+  }
+}
+
+df_elbow$power <- predict(lo_power, df_elbow$rho_prime)
+df_elbow$power[df_elbow$power > 1] <- 1 # Correct for LOESS estimates over 1.0.
+  
+df_elbow
+```
+
+Plot number of samples against social differentiation with power level shown in colour. Overlay optimal sampling.
+
+```{r}
+df_elbow_subset_99 <- subset(df_elbow, threshold==0.99)
+
+ggplot(results_agg, aes(x=cv, y=samples, color=cut(pval, breaks=5, labels=c("0 - 20%", "20 - 40%", "40 - 60%", "60 - 80%", "80 - 100%")))) +
+  geom_point() +
+  geom_line(aes(x=df_elbow_subset_99$S, y=df_elbow_subset_99$I_prime), color="black", size=1) +
+  # xlim(0, 0.5) +
+  scale_color_manual(values = c(cp[2], cp[4], cp[5], cp[6], cp[8])) +
+  theme(legend.position = c(0.8, 0.7)) +
+  coord_cartesian(xlim=c(0, 0.5), ylim=c(0, 500)) +
+  labs(x="Social differentiation, S", y="Sampling effort, I", color="Power") +
+  theme(legend.background=element_rect(fill=alpha('white', 0.9)))
+  
+
+ggsave("figures/elbow_samples.png", width=6, height=4)
 ```
 
 ```{r}
-# Do cut() on cv and calculate proportion of false positives from curve for each break. In other words, analyse performance of line as discriminator.
+df_elbow_subset_9 <- subset(df_elbow, threshold==0.9)
+df_elbow_subset_99 <- subset(df_elbow, threshold==0.99)
+df_elbow_subset_999 <- subset(df_elbow, threshold==0.999)
+
+ggplot(results_agg, aes(x=cv, y=samples, color=cut(pval, breaks=5, labels=c("0 - 20%", "20 - 40%", "40 - 60%", "60 - 80%", "80 - 100%")))) +
+  geom_point() +
+  geom_line(aes(x=df_elbow_subset_9$S, y=df_elbow_subset_9$I_prime), color="black", size=1, linetype="longdash") +
+  geom_line(aes(x=df_elbow_subset_99$S, y=df_elbow_subset_99$I_prime), color="black", size=1) +
+  geom_line(aes(x=df_elbow_subset_999$S, y=df_elbow_subset_999$I_prime), color="black", size=1, linetype="dashed") +
+  # xlim(0, 0.5) +
+  # annotate(geom="text", label="0.90", x=0.06, y=500) + 
+  scale_color_manual(values = c(cp[2], cp[4], cp[5], cp[6], cp[8])) +
+  theme(legend.position = c(0.8, 0.7)) +
+  coord_cartesian(xlim=c(0, 0.5), ylim=c(0, 500)) +
+  labs(x="Social differentiation, S", y="Sampling effort, I", color="Power") +
+  theme(legend.background=element_rect(fill=alpha('white', 0.9)))
+  
+
+ggsave("figures/elbow_samples_rhomax.png", width=6, height=4)
+```
+
+```{r}
+mean(results_agg[results_agg$samples < df_elbow_subset$I_prime, ]$pval < 0.80)
+mean(results_agg[results_agg$samples < df_elbow_subset$I_prime, ]$pval >= 0.80)
+
+mean(results_agg[results_agg$samples >= df_elbow_subset$I_prime, ]$pval < 0.80)
+mean(results_agg[results_agg$samples >= df_elbow_subset$I_prime, ]$pval >= 0.80)
+```
+
+```{r}
+score <- function(p) {
+  a <- 1 - mean(results_agg[results_agg$samples < df_elbow_subset$I_prime, ]$pval >= p)
+  b <- mean(results_agg[results_agg$samples >= df_elbow_subset$I_prime, ]$pval >= p)
+  
+  a * b
+}
+
+ps <- seq(0.05, 0.95, 0.05)
+ps[which.max(sapply(ps, score))]
 ```
