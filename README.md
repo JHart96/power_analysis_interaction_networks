@@ -75,4 +75,4 @@ $correlation
 [1] 0.8998976
 ```
 
-This shows us that the ideal trade-off for `rho_max = 0.99` with this level of social differentiation is a sampling effort of $0.66$ to achieve a correlation of just below 90%. This shows that the estimated network is likely a good representation of the true network.
+This shows us that the ideal trade-off for `rho_max = 0.99` with this level of social differentiation is a sampling effort of 0.66 to achieve a correlation of just below 90%. This shows that the estimated network is likely a good representation of the true network.
