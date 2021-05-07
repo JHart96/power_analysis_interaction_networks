@@ -1,3 +1,26 @@
+# Simulate random graph data collection. Gamma is parameterised by a, b.
+simulate_data <- function (n, p, D, a=10, b=1) {
+  # Simulate true interaction rates.
+  n <- 20 # Individuals in the network.
+  p <- 0.3 # Network density.
+  D <- 20 # Mean sampling time per dyad.
+  A <- matrix(rbinom(n^2, 1, p) * runif(n^2), n, n)
+  A <- A * upper.tri(A)
+  A <- A + t(A)
+  
+  # Simulate observed interaction counts and sampling effort.
+  X <- rpois(n^2, as.vector(A) * d)
+  X <- matrix(X, n, n)
+  X <- X * upper.tri(X)
+  X <- X + t(X)
+  d <- rgamma(n^2, a, b)
+  d <- matrix(d, n, n)
+  d <- d * upper.tri(d)
+  d <- d + t(d)
+  
+  list(X=X, D=d, A=A)
+}
+
 # Functions for estimating the correlation between an estimated network and its unobserved, true network.
 hmean <- function(x) {
   length(x)/sum(1/x)
@@ -118,16 +141,30 @@ estimate_correlation_mcmc <- function(x, d) {
   S_q <- quantile(S_, probs=c(0.025, 0.5, 0.975))
   rho_q <- quantile(rho_, probs=c(0.025, 0.5, 0.975))
   
-  summary <- matrix(nrow=3, ncol=4)
-  rownames(summary) <- c("Observed CV", "Social Differentiation", "Correlation")
+  summary <- matrix(nrow=5, ncol=4)
+  rownames(summary) <- c("Observed CV", "Interaction Rate", "Sampling Effort", "Social Differentiation", "Correlation")
   colnames(summary) <- c("Estimate", "SE", "Lower CI", "Upper CI")
   summary[1, 1] <- sd(x)/mean(x)
-  summary[2, ] <- c(S_q[2], S_se, S_q[1], S_q[3])
-  summary[3, ] <- c(rho_q[2], rho_se, rho_q[1], rho_q[3])
+  summary[2, 1] <- mean(x/d)
+  summary[3, 1] <- mean(x/d) * hmean(d)
+  summary[4, ] <- c(S_q[2], S_se, S_q[1], S_q[3])
+  summary[5, ] <- c(rho_q[2], rho_se, rho_q[1], rho_q[3])
   
   # list(param_summary=param_summary, cor=rho_, S=S_, mu=mu_, I=I_, a=a_, b=b_)
   summary <- signif(summary, 3)
   summary
+}
+
+# Estimates the correlation between true and estimated network given count data x and sampling data d.
+estimate_correlation_interaction <- function(X, D, directed=FALSE) {
+  if (directed) {
+    x <- X[!diag(dim(X)[1])]
+    d <- D[!diag(dim(D)[1])]
+  } else {
+    x <- X[upper.tri(X)]
+    d <- D[upper.tri(D)]
+  }
+  return(estimate_correlation_mcmc(x, d))
 }
 
 # Uses the diminishing returns/elbow estimator to calculate optimal sampling effort.
@@ -153,15 +190,3 @@ estimate_dr <- function(S, rho_max=0.99, I_max=1000) {
   
   list(I=I_prime, rho=rho_prime)
 }
-
-# Conduct a social network power analysis.
-power_analysis_network <- function(effect=NULL, social_differentiation=NULL, interaction_rate=NULL, sampling_times=NULL, method=c("nodal", "diminishing-returns")) {
-
-}
-
-power_analysis_network_nodal <- function(num_nodes=NULL, effect=NULL, social_differentiation=NULL, interaction_rate=NULL, sampling_times=NULL) {
-  lm_sd <- 1 # Standard deviation of residuals
-  beta <- effect * lm_sd * sqrt(1/(1 - effect))/(sd(x) * sqrt(effect + 1)) # Convert r to coefficient value.
-  rnorm()
-}
-
