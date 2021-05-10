@@ -9,16 +9,16 @@ simulate_data <- function (n, p, D, a=10, b=1) {
   A <- A + t(A)
   
   # Simulate observed interaction counts and sampling effort.
-  X <- rpois(n^2, as.vector(A) * d)
+  X <- rpois(n^2, as.vector(A) * D)
   X <- matrix(X, n, n)
   X <- X * upper.tri(X)
   X <- X + t(X)
-  d <- rgamma(n^2, a, b)
-  d <- matrix(d, n, n)
-  d <- d * upper.tri(d)
-  d <- d + t(d)
+  D <- rgamma(n^2, a, b)
+  D <- matrix(D, n, n)
+  D <- D * upper.tri(D)
+  D <- D + t(D)
   
-  list(X=X, D=d, A=A)
+  list(X=X, D=D, A=A)
 }
 
 # Functions for estimating the correlation between an estimated network and its unobserved, true network.
