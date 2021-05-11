@@ -2,6 +2,12 @@
 
 This repository contains code to compute the correlation between an estimated social network and the true, unobserved social network for networks constructed from interaction rates. Simulations are also included to verify the method. This repository also contains code to compute power analyses on interaction networks.
 
+A tidier version of these methods are available as a package at: https://github.com/JHart96/pwrIRGP.
+
+Please cite the paper if you find these methods useful:
+
+Hart, J. D. A., Franks, D. W., Brent, L. J. N., & Weiss, M. N. (2021). Accuracy and Power Analysis of Social Interaction Networks. BioRxiv, 2021.05.07.443094. https://doi.org/10.1101/2021.05.07.443094
+
 ## Example
 
 Load in R files using `source`:
